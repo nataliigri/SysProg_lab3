@@ -20,6 +20,16 @@ enum TokenType {
 struct Token {
     std::string lexeme;
     TokenType type;
+    size_t line;  // Додатковий параметр для збереження рядкового номеру лексеми
+};
+
+// Клас помилки
+class Error {
+public:
+    std::string message;
+    size_t line;
+
+    Error(const std::string& msg, size_t ln) : message(msg), line(ln) {}
 };
 
 // Функція для визначення типу числа
@@ -37,7 +47,6 @@ TokenType getNumberType(const std::string& token) {
     }
 
     return hasDecimal ? NUMBER : IDENTIFIER;
-
 }
 
 // Функція для визначення типу лексеми
@@ -50,31 +59,37 @@ TokenType getTokenType(const std::string& token) {
         return DIRECTIVE;
     } else if (token.substr(0, 2) == "//" || token.substr(0, 2) == "/*") {
         return COMMENT;
+    } else if (token == "$") {
+        return ERROR;  // Treat '$' as ERROR
     } else if (isalpha(token[0]) || token[0] == '_') {
         return IDENTIFIER;
-    } else if (token.size() == 1 && ispunct(token[0])) {
-        return OPERATOR;
-    } else if (ispunct(token[0])) {
+    } else if (token.size() == 1 && ispunct(token[0]) && token != "$") {
         return PUNCTUATION;
     } else {
-        return ERROR;
+        return ERROR;  // Default case for unrecognized tokens
     }
 }
 
 // Функція для розділення рядка на лексеми
-std::vector<Token> tokenize(const std::string& input) {
+std::pair<std::vector<Token>, std::vector<Error>> tokenize(const std::string& input) {
     std::vector<Token> tokens;
+    std::vector<Error> errors;
     std::string token;
     bool inSingleLineComment = false;
     bool inMultiLineComment = false;
     bool inStringLiteral = false;
+    size_t currentLine = 1;
 
     for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == '\n') {
+            ++currentLine;
+        }
+
         if (inSingleLineComment) {
             // Пропуск символів під час однорядкового коментаря
             if (input[i] == '\n' || i == input.size() - 1) {
                 inSingleLineComment = false;
-                tokens.push_back({token, COMMENT});
+                tokens.push_back({token, COMMENT, currentLine});
                 token.clear();
             } else {
                 token += input[i];
@@ -84,7 +99,7 @@ std::vector<Token> tokenize(const std::string& input) {
             token += input[i];
             if (input.substr(i, 2) == "*/") {
                 inMultiLineComment = false;
-                tokens.push_back({token, COMMENT});
+                tokens.push_back({token, COMMENT, currentLine});
                 token.clear();
                 i += 1;
             }
@@ -93,14 +108,18 @@ std::vector<Token> tokenize(const std::string& input) {
             token += input[i];
             if (input[i] == '"' && input[i - 1] != '\\') {
                 inStringLiteral = false;
-                tokens.push_back({token, STRING});
+                tokens.push_back({token, STRING, currentLine});
                 token.clear();
             }
         } else if (isspace(input[i])) {
             // Пропуск пробілів
             if (!token.empty()) {
                 TokenType type = getTokenType(token);
-                tokens.push_back({token, type});
+                if (type == ERROR) {
+                    errors.push_back({token, currentLine});
+                } else {
+                    tokens.push_back({token, type, currentLine});
+                }
                 token.clear();
             }
         } else if (input.substr(i, 2) == "//") {
@@ -109,7 +128,7 @@ std::vector<Token> tokenize(const std::string& input) {
         } else if (input.substr(i, 2) == "/*") {
             inMultiLineComment = true;
             token += input[i];
-            tokens.push_back({token, COMMENT});
+            tokens.push_back({token, COMMENT, currentLine});
             token.clear();
         } else if (input[i] == '"') {
             inStringLiteral = true;
@@ -118,7 +137,11 @@ std::vector<Token> tokenize(const std::string& input) {
             // Додавання символу розділового знаку або оператора
             if (!token.empty()) {
                 TokenType type = getTokenType(token);
-                tokens.push_back({token, type});
+                if (type == ERROR) {
+                    errors.push_back({token, currentLine});
+                } else {
+                    tokens.push_back({token, type, currentLine});
+                }
                 token.clear();
             }
 
@@ -129,11 +152,17 @@ std::vector<Token> tokenize(const std::string& input) {
                 input[i] == '<' || input[i] == '>' || input[i] == '=' || input[i] == '&' || input[i] == '|' ||
                 input[i] == '!' || input[i] == '^') {
                 type = OPERATOR;
+            } else if (input[i] == '$') {
+                type = ERROR;
             } else {
                 type = PUNCTUATION;
             }
 
-            tokens.push_back({token, type});
+            if (type == ERROR) {
+                errors.push_back({token, currentLine});
+            } else {
+                tokens.push_back({token, type, currentLine});
+            }
             token.clear();
         } else {
             token += input[i];
@@ -142,10 +171,14 @@ std::vector<Token> tokenize(const std::string& input) {
 
     if (!token.empty()) {
         TokenType type = getTokenType(token);
-        tokens.push_back({token, type});
+        if (type == ERROR) {
+            errors.push_back({token, currentLine});
+        } else {
+            tokens.push_back({token, type, currentLine});
+        }
     }
 
-    return tokens;
+    return {tokens, errors};
 }
 
 // Функція для виводу результатів
@@ -179,8 +212,19 @@ void printTokens(const std::vector<Token>& tokens) {
                 std::cout << "ERROR";
                 break;
         }
+        std::cout << ", Line: " << token.line << " >" << std::endl;
+    }
+}
 
-        std::cout << " >" << std::endl;
+// Функція для виводу помилок
+void printErrors(const std::vector<Error>& errors) {
+    if (errors.empty()) {
+        std::cout << "No errors found." << std::endl;
+    } else {
+        std::cout << "Errors:" << std::endl;
+        for (const auto& error : errors) {
+            std::cout << "Error: " << error.message << ", Line: " << error.line << std::endl;
+        }
     }
 }
 
@@ -189,7 +233,7 @@ int main() {
     std::cout << "Enter the name of the file containing C++ code: ";
     std::cin >> filename;
 
-    std::ifstream file("../"+filename);
+    std::ifstream file("../" + filename);
 
     if (!file.is_open()) {
         std::cerr << "Error opening file " << filename << std::endl;
@@ -200,9 +244,9 @@ int main() {
 
     file.close();
 
-    std::vector<Token> tokens = tokenize(input);
-    printTokens(tokens);
+    auto result = tokenize(input);
+    printTokens(result.first);
+    printErrors(result.second);
 
     return 0;
 }
-
